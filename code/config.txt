@@ -1,9 +1,9 @@
 {
     "jd": {
-        "spider_start_time": "2019-11-01",
+        "spider_start_time": "2019-01-01",
         "orders_year": "2019"
     },
     "taobao": {
-        "spider_start_time": "2019-10-01"
+        "spider_start_time": "2019-01-01"
     }
 }

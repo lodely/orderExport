@@ -9,6 +9,7 @@ import requests
 import sys
 import db_common
 import csv
+import re
 import codecs
 reload(sys)
 sys.setdefaultencoding('utf-8')
@@ -65,13 +66,16 @@ class Spider:
             'pageSize': '15',
             'prePageNo': '1'
         }
-        url = 'https://buyertrade.taobao.com/trade/itemlist/asyncBought.htm?action=itemlist/BoughtQueryAction&event_submit_do_query=1&_input_charset=utf8'
+        url = 'https://buyertrade.taobao.com/trade/itemlist/asyncBought.htm?action=itemlist/BoughtQueryAction&event_submit_do_query=1&_input_charset=utf8&sm'
         html = requests.post(url, headers=headers, data=param).text
         return html
 
     @staticmethod
     def get_total_page(html):
         total_page = db_common.GetJsonValue(html, 'page', 'totalPage')
+        # 如果没有拿到总页数，给定抓前100页
+        if not total_page:
+            total_page = 100
         return total_page
 
     def parse_orders_item(self, obj_date, item):
@@ -84,11 +88,15 @@ class Spider:
     def parse_list(self, html):
         items = db_common.GetJsonValue(html, 'mainOrders')
         ret = []
-        for item in items:
-            order_result = self.parse_detail(item)
-            if self.end_tag:
-                break
-            ret += order_result
+        if items:
+            for item in items:
+                try:
+                    order_result = self.parse_detail(item)
+                    if self.end_tag:
+                        break
+                    ret += order_result
+                except:
+                    pass
         return ret
 
     @staticmethod
@@ -132,10 +140,20 @@ class Spider:
             item_info = prod_info['itemInfo']
             item_id = item_info.get('id', '')
             if item_id:
-                url = 'https:' + prod_info['itemInfo']['itemUrl']
+                # 有的订单没有itemUrl
+                item_url = db_common.GetJsonValue(prod_info, 'itemInfo', 'itemUrl')
+                url = 'https:' + item_url if item_url else ''
                 title = prod_info['itemInfo']['title']
                 item_price = prod_info['priceInfo']['realTotal']
-                item_count = prod_info['quantity']
+                quantity = prod_info['quantity']
+                if quantity.count(u'件'):
+                    try:
+                        data = re.search(ur'(\d+)件', quantity)
+                        item_count = data.group(1)
+                    except Exception:
+                        item_count = quantity
+                else:
+                    item_count = quantity
                 if order_time < self.param['spider_start_time']:
                     self.end_tag = True
                     break
@@ -146,11 +164,16 @@ class Spider:
     def order_list(self):
         html = self.get_html('1')
         total_page = self.get_total_page(html)
-        olt = self.parse_list(html)
+        olt = []
+        order_list = self.parse_list(html)
+        if order_list:
+            olt += order_list
         page = 2
-        while not self.end_tag and page < total_page+1:
+        while not self.end_tag and total_page and page < total_page+1:
             html = self.get_html(str(page))
-            olt += self.parse_list(html)
+            order_list = self.parse_list(html)
+            if order_list:
+                olt += order_list
             page += 1
         return olt
 
@@ -170,6 +193,9 @@ def main(cookie):
             writer.writerow(column_name)
             for item in orders_ret:
                 writer.writerow(item)
+    else:
+        with codecs.open(u'淘宝(天猫)--该账号没有订单数据，请检查.csv', 'w', 'gbk') as f:
+            f.write('')
 
 
 if __name__ == '__main__':

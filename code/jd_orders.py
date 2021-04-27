@@ -11,6 +11,7 @@ import sys
 import db_common
 import csv
 import codecs
+import datetime
 reload(sys)
 sys.setdefaultencoding('utf-8')
 
@@ -37,14 +38,22 @@ class Spider:
         try:
             with open('config.txt', 'r') as f:
                 config_data = f.read()
-                self.param['spider_start_time'] = db_common.GetJsonValue(config_data, 'jd', 'spider_start_time')
-                self.param['orders_year'] = db_common.GetJsonValue(config_data, 'jd', 'orders_year')
-                if not self.param['spider_start_time']:
-                    self.param['spider_start_time'] = '2019-07-01'
-                    self.param['orders_year'] = '2019'
+            self.param['spider_start_time'] = db_common.GetJsonValue(config_data, 'jd', 'spider_start_time')
+            if len(self.param['spider_start_time']) < 10:
+                items = self.param['spider_start_time'].split('-')
+                temp = items[0]
+                for item in items[1:]:
+                    temp = '{}-0{}'.format(temp, item) if len(item) < 2 else '{}-{}'.format(temp, item)
+                self.param['spider_start_time'] = temp
+            self.param['orders_year'] = self.param['spider_start_time'][:4]
+            self.param['diff'] = int(datetime.datetime.now().strftime('%Y')) - int(self.param['orders_year'])
+            if not self.param['spider_start_time']:
+                self.param['spider_start_time'] = '2019-07-01'
+                self.param['orders_year'] = self.param['spider_start_time'][:4]
         except Exception:
             self.param['spider_start_time'] = '2019-07-01'
-            self.param['orders_year'] = '2019'
+            self.param['orders_year'] = self.param['spider_start_time'][:4]
+            self.param['diff'] = 0
 
     def set_cookie(self, cookie):
         self.cookie = cookie
@@ -53,7 +62,7 @@ class Spider:
         headers = {
             'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;'
                       'q=0.8,application/signed-exchange;v=b3',
-            'accept-encoding': 'gzip, deflate, br',
+            # 'accept-encoding': 'gzip, deflate, br',
             'accept-language': 'en,zh-CN;q=0.9,zh;q=0.8',
             'cache-control': 'max-age=0',
             'cookie': self.cookie,
@@ -75,14 +84,15 @@ class Spider:
             print(e)
         return html
 
-    @staticmethod
-    def get_total_page(html):
-        pattern = re.compile(r'共(\d+)页')
-        total_page = re.search(pattern, html).group(1)
-        if total_page:
-            total_page = int(total_page)
-        else:
-            total_page = 1
+    def get_total_page(self, html):
+        total_page = 200
+        # try:
+            # pattern = re.compile(r'共(\d+)页')
+            # content = re.search(pattern, html).group(1)
+            # if content:
+            #     total_page = int(content)
+        # except:
+        #     self.end_tag = True
         return total_page
 
     def construct_url(self, tag):
@@ -105,6 +115,8 @@ class Spider:
         url = db_common.fj_function(item, "href='//", "'")[1]
         if not url:
             url = db_common.fj_function(item, 'href="//', '"')[1]
+        if not url:
+            url = db_common.fj_function(item, "href='", "'")[1].replace('http://', '').replace('https://', '')
         orders_date = db_common.fj_function(item, '<span class="dealtime" title="', '">')[1]
         if orders_date[:10] < self.param['spider_start_time']:
             self.end_tag = True
@@ -200,6 +212,14 @@ class Spider:
             status = db_common.fj_function(html, "<h3 class='state-txt ftx-02'>", '</h3>')[1]
         pay_money = self.get_real_pay(html)
         ware_info = db_common.fj_function(html, "['fwjBuyInWareInfo']='", "';")[1]
+        # 临时添加，收件人信息
+        # tmp = db_common.fj_function(html, '收货人：', '</div>')[1]
+        # user_name = re.sub('<.*?>', '', tmp).strip()
+        # tmp = db_common.fj_function(html, '地址：', '</div>')[1]
+        # address = re.sub('<.*?>', '', tmp).strip()
+        # tmp = db_common.fj_function(html, '手机号码：', '</div>')[1]
+        # phone = re.sub('<.*?>', '', tmp).strip()
+
         goods_list = []
         for item in items[1:]:
             url = db_common.fj_function(item, '<a href="//', '"')[1]
@@ -211,7 +231,8 @@ class Spider:
             price = self.get_goods_price(title, html, f_price)
             temp = db_common.fj_function(item, '<span class="f-price', '<td id="jingdou')[1]
             count = db_common.fj_function(temp, '<td>', '</td>')[1]
-            goods_list.append([shop_name, shop_url, title, url, status, count, price, pay_money, brand_id, cate])
+            goods_list.append([shop_name, shop_url, title, url, status, count, price,
+                               pay_money, brand_id, cate])
         return goods_list
 
     @staticmethod
@@ -239,6 +260,22 @@ class Spider:
         cate = db_common.fj_function(html, 'cat: [', ']')[1].replace(',', ';')
         return brand_id, cate
 
+    def get_global_user(self, html):
+        # 收件人信息
+        users = db_common.fj_function(html, '<div class="user-info">', '商品信息')[1]
+        items = users.split('<div class="row">')
+        user_name = address = phone = ''
+        for item in items:
+            if item.count('收货人信息'):
+                tmp = db_common.fj_function(item, '<div class="txt"', '</div>')[1]
+                tmp = re.sub('<.*?>', '', tmp).strip()
+                user_name = db_common.fj_function(tmp, '>', '（')[1]
+                phone = db_common.fj_function(tmp, '（', '）')[1]
+            elif item.count('收货地址'):
+                tmp = db_common.fj_function(item, '<div class="txt">', '</div>')[1]
+                address = re.sub('<.*?>', '', tmp).strip()
+        return user_name, address, phone
+
     def global_goods_info(self, html):
         goods_list = []
         shop_data = db_common.fj_function(html, '店铺名称：', '联系卖家')[1]
@@ -246,6 +283,8 @@ class Spider:
         shop_url = ''
         pay_money = db_common.fj_function(html, '<b class="red">¥', '</b>')[1]
         status = db_common.fj_function(html, '当前状态：', '</div>')[1]
+        # user_name, address, phone = self.get_global_user(html)
+
         temp = db_common.fj_function(html, '<td class="itemName">', '<div class="price-info presale-price-info">')[1]
         items = temp.split('<tr class="tr-td" skuid')
         for item in items[1:]:
@@ -256,7 +295,8 @@ class Spider:
             price = db_common.fj_function(
                 item, '<td class="jdPrice">', '</td>')[1].replace('¥', '').replace('\n', '').strip()
             brand_id, cate = self.get_global_brand(url)
-            goods_list.append([shop_name, shop_url, title, url, status, count, price, pay_money, brand_id, cate])
+            goods_list.append([shop_name, shop_url, title, url, status, count, price,
+                               pay_money, brand_id, cate])
         return goods_list
 
     def parse_detail(self, html, orders_date):
@@ -271,16 +311,32 @@ class Spider:
         return goods_ret
 
     def order_list(self):
-        url = self.construct_url('list').format('1')
-        html = self.get_html(url)
-        total_page = self.get_total_page(html)
-        olt = self.parse_list(html)
-        page = 2
-        while not self.end_tag and page < total_page+1:
-            url = self.construct_url('list').format(page)
-            html = self.get_html(url)
-            olt += self.parse_list(html)
-            page += 1
+        olt = []
+        url = ''
+        while self.param['diff'] >= 0:
+            try:
+                url = self.construct_url('list').format('1')
+                html = self.get_html(url)
+                total_page = self.get_total_page(html)
+                if not self.end_tag:
+                    olt += self.parse_list(html)
+                page = 2
+                while not self.end_tag and page < total_page+1:
+                    url = self.construct_url('list').format(page)
+                    html = self.get_html(url)
+                    if html.count('最近没有下过订单哦'):
+                        break
+                    olt += self.parse_list(html)
+                    page += 1
+                self.end_tag = False
+                self.param['diff'] -= 1
+                self.param['orders_year'] = str(int(self.param['orders_year']) + 1)
+            except Exception as e:
+                error_str = '''
+                    url: {}
+                    order_list error: {}
+                '''.format(url, e)
+                print(error_str)
         return olt
 
 
@@ -290,26 +346,37 @@ def main(cookie):
     spider.set_cookie(cookie)
     olt = spider.order_list()
     orders_ret = []
+    url = ''
     for item in olt:
-        url = item[0]
-        orders_date = item[1]
-        detail_html = spider.get_html('https://' + url)
-        goods_ret = spider.parse_detail(detail_html, orders_date)
-        if goods_ret:
-            orders_ret += goods_ret
+        try:
+            url = item[0]
+            orders_date = item[1]
+            detail_html = spider.get_html('https://' + url)
+            goods_ret = spider.parse_detail(detail_html, orders_date)
+            if goods_ret:
+                orders_ret += goods_ret
+        except Exception as e:
+            error_str = '''
+                url: {}
+                parse_detail error: {}
+            '''.format(url, e)
+            print(error_str)
     if orders_ret:
         column_name = [
-            "订单号", "订单日期", "店铺名", "店铺链接", "商品名", "链接", "订单状态", "商品数量", "商品单价", "订单实付款",
-            "品牌", "类别"
+            "订单号", "订单日期", "店铺名", "店铺链接", "商品名", "链接", "订单状态",
+            "商品数量", "商品单价", "订单实付款", "品牌", "类别"
         ]
         with codecs.open(u'京东订单列表.csv', 'w', 'gbk') as f:
             writer = csv.writer(f)
             writer.writerow(column_name)
             for item in orders_ret:
                 writer.writerow(item)
+    else:
+        with codecs.open(u'京东--该账号没有订单数据，请检查.csv', 'w', 'gbk') as f:
+            f.write('')
 
 
 if __name__ == '__main__':
-    # 设置cookie
+    # 设置京东cookie
     cookies = ""
     main(cookies)
